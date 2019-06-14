@@ -13,6 +13,10 @@ try:
     from scipy.ndimage import gaussian_filter
 except ImportError:
     gaussian_filter = None
+try: 
+    import astropy.stats.bayesian_blocks as bb
+except ImportError:
+    bb = None
 
 __all__ = ["corner", "hist2d", "quantile"]
 
@@ -41,6 +45,9 @@ def corner(xs, bins=20, range=None, weights=None, color="k", hist_bin_factor=1,
     bins : int or array_like[ndim,]
         The number of bins to use in histograms, either as a fixed value for
         all dimensions, or as a list of integers for each dimension.
+
+        Alternatively if string 'blocks' we will compute bayesian block edges
+        using astropy and plot with those.
 
     weights : array_like[nsamples,]
         The weight of each sample. If `None` (default), samples are given
@@ -197,17 +204,18 @@ def corner(xs, bins=20, range=None, weights=None, color="k", hist_bin_factor=1,
         raise ValueError("Dimension mismatch between samples and range")
 
     # Parse the bin specifications.
-    try:
-        bins = [int(bins) for _ in range]
-    except TypeError:
-        if len(bins) != len(range):
-            raise ValueError("Dimension mismatch between bins and range")
-    try:
-        hist_bin_factor = [float(hist_bin_factor) for _ in range]
-    except TypeError:
-        if len(hist_bin_factor) != len(range):
-            raise ValueError("Dimension mismatch between hist_bin_factor and "
-                             "range")
+    if bins != 'blocks':
+        try:
+            bins = [int(bins) for _ in range]
+        except TypeError:
+            if len(bins) != len(range):
+                raise ValueError("Dimension mismatch between bins and range")
+        try:
+            hist_bin_factor = [float(hist_bin_factor) for _ in range]
+        except TypeError:
+            if len(hist_bin_factor) != len(range):
+                raise ValueError("Dimension mismatch between hist_bin_factor and "
+                                 "range")
 
     # Some magic numbers for pretty axis layout.
     K = len(xs)
@@ -259,13 +267,22 @@ def corner(xs, bins=20, range=None, weights=None, color="k", hist_bin_factor=1,
                 ax = axes[i, i]
         # Plot the histograms.
         if smooth1d is None:
-            bins_1d = int(max(1, np.round(hist_bin_factor[i] * bins[i])))
+            if bins=='blocks':
+                bins_1d = bb(x)
+            else:
+                bins_1d = int(max(1, np.round(hist_bin_factor[i] * bins[i])))
             n, _, _ = ax.hist(x, bins=bins_1d, weights=weights,
                               range=np.sort(range[i]), **hist_kwargs)
         else:
             if gaussian_filter is None:
                 raise ImportError("Please install scipy for smoothing")
-            n, b = np.histogram(x, bins=bins[i], weights=weights,
+            if bb is None:
+                raise ImportError("Please install astropy for bayesian blocks")
+            if bins=='blocks':
+                bins_1d = bb(x)
+            else:
+                bins_1d = bins[i]
+            n, b = np.histogram(x, bins=bins_1d, weights=weights,
                                 range=np.sort(range[i]))
             n = gaussian_filter(n, smooth1d)
             x0 = np.array(list(zip(b[:-1], b[1:]))).flatten()
@@ -367,8 +384,16 @@ def corner(xs, bins=20, range=None, weights=None, color="k", hist_bin_factor=1,
             if hasattr(y, "compressed"):
                 y = y.compressed()
 
+            if bins=='blocks':
+
+                arg2d = bins
+
+            else:
+
+                arg2d = [bins[j], bins[i]]
+
             hist2d(y, x, ax=ax, range=[range[j], range[i]], weights=weights,
-                   color=color, smooth=smooth, bins=[bins[j], bins[i]],
+                   color=color, smooth=smooth, bins=arg2d,
                    **hist2d_kwargs)
 
             if truths is not None:
@@ -571,7 +596,15 @@ def hist2d(x, y, bins=20, range=None, weights=None, levels=None, smooth=None,
 
     # We'll make the 2D histogram to directly estimate the density.
     try:
-        H, X, Y = np.histogram2d(x.flatten(), y.flatten(), bins=bins,
+        if bins=='blocks':
+            binsx = bb(x.flatten())
+            binsy = bb(y.flatten())
+            H, X, Y = np.histogram2d(x.flatten(), y.flatten(), bins=[binsx, binsy],
+                                 range=list(map(np.sort, range)),
+                                 weights=weights)
+        else:
+
+            H, X, Y = np.histogram2d(x.flatten(), y.flatten(), bins=bins,
                                  range=list(map(np.sort, range)),
                                  weights=weights)
     except ValueError:
